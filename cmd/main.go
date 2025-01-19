@@ -11,7 +11,6 @@ import (
 func main() {
 
 	// Initialize the logger
-	// Initialize the logger
 	if err := log.Initialize(); err != nil {
 		panic(err)
 	}

@@ -1,8 +1,11 @@
 package log
 
 import (
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -13,10 +16,25 @@ var (
 	Logger *zap.Logger
 )
 
-const logFilePath string = "application.log"
+const (
+	logFilePath  = "application.log"
+	configPath   = "..\\cofigurationFiles\\config.json"
+	defaultLevel = zapcore.InfoLevel // Default log level
+)
 
-// Initialize sets up the logger to write logs to a file
+// Config structure to hold configuration data
+type Config struct {
+	LogLevel string `json:"log_level"`
+}
+
+// Initialize sets up the logger to write logs to a file with the log level from config
 func Initialize() error {
+	// Load the log level from the configuration file
+	logLevel, err := loadLogLevel()
+	if err != nil {
+		return err
+	}
+
 	// Create log directory if it doesn't exist
 	logDir := filepath.Dir(logFilePath)
 	if _, err := os.Stat(logDir); os.IsNotExist(err) {
@@ -32,30 +50,28 @@ func Initialize() error {
 	}
 	fileWriteSyncer := zapcore.AddSync(file)
 
-	// Set up the encoder (JSON format)
+	// Set up the encoder (Plain text format with desired fields)
 	encoderConfig := zapcore.EncoderConfig{
-		TimeKey:    "timestamp",
-		LevelKey:   "level",
-		MessageKey: "message",
-		CallerKey:  "caller",
-		EncodeTime: millisecondTimeEncoder, // Custom time format
-		//EncodeTime:   zapcore.ISO8601TimeEncoder,
+		TimeKey:      "timestamp",
+		LevelKey:     "level",
+		MessageKey:   "message",
+		CallerKey:    "caller",
+		EncodeTime:   millisecondTimeEncoder, // Custom time format
 		EncodeLevel:  zapcore.CapitalLevelEncoder,
 		EncodeCaller: zapcore.ShortCallerEncoder,
 	}
 
+	// Add a log level enabler
+	levelEnabler := zap.LevelEnablerFunc(func(level zapcore.Level) bool {
+		return level >= logLevel // Only enable logs at or above the configured level
+	})
+
+	// Create a core with the encoder and file write syncer
 	core := zapcore.NewCore(
 		zapcore.NewConsoleEncoder(encoderConfig), // Use plain text encoding
 		fileWriteSyncer,                          // Write logs to file
-		zapcore.DebugLevel,                       // Log level
+		levelEnabler,                             // Log level from config
 	)
-
-	// Set log level
-	// core := zapcore.NewCore(
-	// 	zapcore.NewJSONEncoder(encoderConfig),
-	// 	fileWriteSyncer,
-	// 	zapcore.DebugLevel, // Change this to zapcore.InfoLevel, zapcore.ErrorLevel, etc., as needed
-	// )
 
 	// Build the logger
 	Logger = zap.New(core, zap.AddCaller(), zap.AddCallerSkip(1))
@@ -77,7 +93,7 @@ func Error(message string, fields ...zap.Field) {
 	Logger.Error(message, fields...)
 }
 
-// Warn logs an warning-level message
+// Warn logs a warning-level message
 func Warn(message string, fields ...zap.Field) {
 	Logger.Warn(message, fields...)
 }
@@ -90,4 +106,45 @@ func millisecondTimeEncoder(t time.Time, enc zapcore.PrimitiveArrayEncoder) {
 // Sync flushes any buffered log entries
 func Sync() {
 	_ = Logger.Sync()
+}
+
+// loadLogLevel reads the log level from the config.json file
+func loadLogLevel() (zapcore.Level, error) {
+	file, err := os.Open(configPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return defaultLevel, nil // Return default log level if config file doesn't exist
+		}
+		return defaultLevel, err
+	}
+	defer file.Close()
+
+	var config Config
+	decoder := json.NewDecoder(file)
+	if err := decoder.Decode(&config); err != nil {
+		return defaultLevel, err
+	}
+
+	// Convert the log level string to zapcore.Level
+	return stringToLogLevel(config.LogLevel), nil
+}
+
+// stringToLogLevel converts a string to zapcore.Level
+func stringToLogLevel(level string) zapcore.Level {
+	switch strings.ToLower(level) {
+	case "debug":
+		return zapcore.DebugLevel
+	case "info":
+		return zapcore.InfoLevel
+	case "warn":
+		return zapcore.WarnLevel
+	case "error":
+		return zapcore.ErrorLevel
+	case "fatal":
+		return zapcore.FatalLevel
+	case "panic":
+		return zapcore.PanicLevel
+	default:
+		return defaultLevel // Default to Info level if invalid input
+	}
 }
